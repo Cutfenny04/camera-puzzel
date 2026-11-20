@@ -57,6 +57,15 @@ const galleryCount = document.getElementById("galleryCount");
 const downloadStripBtn = document.getElementById("downloadStripBtn");
 const resetAllBtn = document.getElementById("resetAllBtn");
 const stripCompleteMsg = document.getElementById("stripCompleteMsg");
+const startBtn = document.getElementById("startBtn");
+const loaderBox = document.getElementById("loaderBox");
+const confirmDialog = document.getElementById("confirmDialog");
+const confirmOk = document.getElementById("confirmOk");
+const confirmCancel = document.getElementById("confirmCancel");
+
+const COLOR_FLASH = "#ffd84a";
+const COLOR_OK = "#3fb37f";
+const DISPLAY_FONT = "'Bricolage Grotesque', 'DM Sans', sans-serif";
 
 let appState = "tracking";
 
@@ -88,6 +97,7 @@ function addToGallery(snapshotCanvas) {
   renderGalleryThumb(snapshotCanvas, galleryEntries.length);
   galleryCount.textContent = `${galleryEntries.length} / ${STRIP_MAX_PHOTOS}`;
   if (galleryEmpty) galleryEmpty.style.display = "none";
+  updateStripDownloadAvailability();
 
   if (galleryEntries.length >= STRIP_MAX_PHOTOS) {
     showStripComplete();
@@ -119,17 +129,12 @@ const STRIP_FILE_BG = "#ffffff";
 function downloadPhotoStrip() {
   if (galleryEntries.length === 0) return;
 
-  const entries = galleryEntries;
-  const targetW = entries[0].canvas.width;
-  const scaledHeights = entries.map((entry) =>
-    Math.round(entry.canvas.height * (targetW / entry.canvas.width))
-  );
-
-  const totalH =
-    STRIP_FILE_BORDER * 2 +
-    scaledHeights.reduce((sum, h) => sum + h, 0) +
-    STRIP_FILE_GAP * (entries.length - 1);
-  const totalW = targetW + STRIP_FILE_BORDER * 2;
+  const frameW = 480;
+  const frameH = 360;
+  const footerH = 64;
+  const n = galleryEntries.length;
+  const totalW = frameW + STRIP_FILE_BORDER * 2;
+  const totalH = STRIP_FILE_BORDER + n * frameH + (n - 1) * STRIP_FILE_GAP + footerH;
 
   const stripCanvas = document.createElement("canvas");
   stripCanvas.width = totalW;
@@ -140,18 +145,27 @@ function downloadPhotoStrip() {
   stripCtx.fillRect(0, 0, totalW, totalH);
 
   let cursorY = STRIP_FILE_BORDER;
-  entries.forEach((entry, i) => {
-    const h = scaledHeights[i];
-    stripCtx.drawImage(entry.canvas, STRIP_FILE_BORDER, cursorY, targetW, h);
-    cursorY += h + STRIP_FILE_GAP;
+  galleryEntries.forEach((entry) => {
+    const img = entry.thumb || entry.canvas;
+    stripCtx.drawImage(img, STRIP_FILE_BORDER, cursorY, frameW, frameH);
+    cursorY += frameH + STRIP_FILE_GAP;
   });
+
+  const date = new Date().toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" });
+  stripCtx.fillStyle = "#8e1b2c";
+  stripCtx.textAlign = "center";
+  stripCtx.textBaseline = "middle";
+  stripCtx.font = `800 26px ${DISPLAY_FONT}`;
+  stripCtx.fillText("PuzzleCam", totalW / 2, totalH - footerH / 2 - 8);
+  stripCtx.font = `500 14px 'DM Sans', sans-serif`;
+  stripCtx.fillText(date, totalW / 2, totalH - footerH / 2 + 16);
 
   stripCanvas.toBlob((blob) => {
     if (!blob) return;
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `puzzlecam_tira_${Date.now()}.png`;
+    link.download = `puzzlecam-tira-${Date.now()}.png`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -161,36 +175,43 @@ function downloadPhotoStrip() {
 
 function resetEverything() {
   galleryEntries.length = 0;
-  galleryStrip.innerHTML = "";
+  galleryStrip.querySelectorAll(".slot").forEach((slot) => {
+    slot.querySelector("canvas")?.remove();
+  });
   galleryCount.textContent = `0 / ${STRIP_MAX_PHOTOS}`;
-  if (galleryEmpty) {
-    galleryEmpty.style.display = "block";
-    galleryStrip.appendChild(galleryEmpty);
-  }
+  if (galleryEmpty) galleryEmpty.style.display = "";
   hideStripComplete();
   updateStripDownloadAvailability();
   resetPuzzleOnly();
-  statusText.textContent = "todo reiniciado";
+  statusText.textContent = "tira baru siap";
 }
 
 function renderGalleryThumb(snapshotCanvas, index) {
-  const print = document.createElement("div");
-  print.className = "print";
+  const slot = galleryStrip.querySelector(`.slot[data-slot="${index}"]`);
+  if (!slot) return;
 
+  // Crop ke rasio 4:3 agar semua slot rapi
+  const THUMB_W = 480;
+  const THUMB_H = 360;
   const thumbCanvas = document.createElement("canvas");
-  const THUMB_W = 220;
-  const scale = THUMB_W / snapshotCanvas.width;
   thumbCanvas.width = THUMB_W;
-  thumbCanvas.height = Math.round(snapshotCanvas.height * scale);
-  thumbCanvas.getContext("2d").drawImage(snapshotCanvas, 0, 0, thumbCanvas.width, thumbCanvas.height);
+  thumbCanvas.height = THUMB_H;
+  const tctx = thumbCanvas.getContext("2d");
+  const srcAspect = snapshotCanvas.width / snapshotCanvas.height;
+  const dstAspect = THUMB_W / THUMB_H;
+  let sw = snapshotCanvas.width, sh = snapshotCanvas.height, sx = 0, sy = 0;
+  if (srcAspect > dstAspect) {
+    sw = sh * dstAspect;
+    sx = (snapshotCanvas.width - sw) / 2;
+  } else {
+    sh = sw / dstAspect;
+    sy = (snapshotCanvas.height - sh) / 2;
+  }
+  tctx.drawImage(snapshotCanvas, sx, sy, sw, sh, 0, 0, THUMB_W, THUMB_H);
+  galleryEntries[index - 1].thumb = thumbCanvas;
 
-  const label = document.createElement("div");
-  label.className = "print-label";
-  label.textContent = `#${String(index).padStart(2, "0")}`;
-
-  print.appendChild(thumbCanvas);
-  print.appendChild(label);
-  galleryStrip.insertBefore(print, galleryStrip.firstChild);
+  slot.querySelector("canvas")?.remove();
+  slot.appendChild(thumbCanvas);
 }
 
 function resetPuzzleOnly() {
@@ -235,7 +256,7 @@ window.addEventListener("resize", fitCanvasToWindow);
 
 async function initWebcam() {
   if (!navigator.mediaDevices?.getUserMedia) {
-    throw new Error("Este navegador no soporta getUserMedia.");
+    throw new Error("Browser ini tidak mendukung akses kamera. Gunakan Chrome atau Edge versi terbaru.");
   }
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
@@ -271,7 +292,7 @@ async function initHandLandmarker() {
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
       ),
       LOAD_TIMEOUT_MS,
-      "Tiempo de espera agotado cargando el runtime de MediaPipe (WASM). Revisa tu conexión a internet o si cdn.jsdelivr.net está bloqueado."
+      "Gagal memuat runtime MediaPipe (waktu habis). Periksa koneksi internet atau apakah cdn.jsdelivr.net diblokir."
     );
   } catch (err) {
     throw err;
@@ -292,11 +313,11 @@ async function initHandLandmarker() {
         minTrackingConfidence: 0.6,
       }),
       LOAD_TIMEOUT_MS,
-      "Tiempo de espera agotado descargando el modelo HandLandmarker (~10MB) con GPU."
+      "Waktu habis saat mengunduh model tangan (mode GPU)."
     );
     return handLandmarker;
   } catch (gpuErr) {
-    console.warn("[PuzzleCam] Falló con delegate GPU, reintentando con CPU…", gpuErr);
+    console.warn("[PuzzleCam] Mode GPU gagal, mencoba ulang dengan CPU…", gpuErr);
   }
 
   try {
@@ -314,7 +335,7 @@ async function initHandLandmarker() {
         minTrackingConfidence: 0.6,
       }),
       LOAD_TIMEOUT_MS,
-      "Tiempo de espera agotado descargando el modelo HandLandmarker (~10MB) incluso con CPU. Revisa tu conexión o si storage.googleapis.com está bloqueado en tu red."
+      "Gagal mengunduh model tangan (±10 MB). Periksa koneksi internet atau apakah storage.googleapis.com diblokir di jaringanmu."
     );
     return handLandmarker;
   } catch (cpuErr) {
@@ -401,7 +422,7 @@ function drawCountdownOverlay(box) {
   applyBWInsideBox(box);
 
   ctx.save();
-  ctx.strokeStyle = "#f5c518";
+  ctx.strokeStyle = COLOR_FLASH;
   ctx.lineWidth = 3;
   ctx.strokeRect(box.x, box.y, box.width, box.height);
 
@@ -412,14 +433,14 @@ function drawCountdownOverlay(box) {
   ctx.fillStyle = "rgba(10,10,8,0.45)";
   ctx.fillRect(box.x, box.y, box.width, box.height);
 
-  ctx.font = `${Math.max(48, Math.min(box.width, box.height) * 0.4)}px 'IBM Plex Mono', monospace`;
-  ctx.fillStyle = "#f5c518";
+  ctx.font = `800 ${Math.max(48, Math.min(box.width, box.height) * 0.45)}px ${DISPLAY_FONT}`;
+  ctx.fillStyle = COLOR_FLASH;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(String(n), cx, cy);
   ctx.restore();
 
-  statusText.textContent = `capturando en ${n}…`;
+  statusText.textContent = `foto dalam ${n}…`;
 }
 
 function gaussianNoise(std) {
@@ -720,7 +741,7 @@ function drawBoardAndPieces() {
   ctx.restore();
 
   ctx.save();
-  ctx.strokeStyle = "rgba(245,197,24,0.18)";
+  ctx.strokeStyle = "rgba(255,216,74,0.22)";
   ctx.lineWidth = 1;
   for (let i = 1; i < GRID; i++) {
     ctx.beginPath();
@@ -739,31 +760,55 @@ function drawBoardAndPieces() {
   for (const piece of sorted) {
     ctx.save();
     if (piece.dragging) {
-      ctx.shadowColor = "rgba(245,197,24,0.9)";
+      ctx.shadowColor = "rgba(255,216,74,0.9)";
       ctx.shadowBlur = 14;
     }
     ctx.drawImage(piece.canvas, piece.x, piece.y, piece.w, piece.h);
-    ctx.strokeStyle = piece.placed ? "#5fae6e" : "rgba(234,229,214,0.5)";
+    ctx.strokeStyle = piece.placed ? COLOR_OK : "rgba(234,229,214,0.5)";
     ctx.lineWidth = piece.dragging ? 3 : 1.5;
     ctx.strokeRect(piece.x, piece.y, piece.w, piece.h);
     ctx.restore();
   }
 
   ctx.save();
-  ctx.strokeStyle = puzzle.solved ? "#5fae6e" : "#f5c518";
+  ctx.strokeStyle = puzzle.solved ? COLOR_OK : COLOR_FLASH;
   ctx.lineWidth = 3;
   ctx.strokeRect(box.x, box.y, box.width, box.height);
   ctx.restore();
 
   if (puzzle.solved) {
     ctx.save();
-    ctx.fillStyle = "rgba(95,174,110,0.15)";
+    ctx.fillStyle = "rgba(63,179,127,0.18)";
     ctx.fillRect(box.x, box.y, box.width, box.height);
-    ctx.font = `${Math.max(20, box.width * 0.07)}px 'IBM Plex Mono', monospace`;
-    ctx.fillStyle = "#5fae6e";
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    const title = "Lengkap!";
+    const hint = "kepalkan tangan atau klik untuk menyimpan";
+    let titleSize = Math.max(22, box.width * 0.14);
+    ctx.font = `800 ${titleSize}px ${DISPLAY_FONT}`;
+    const tw = ctx.measureText(title).width;
+    if (tw > box.width * 0.85) {
+      titleSize *= (box.width * 0.85) / tw;
+      ctx.font = `800 ${titleSize}px ${DISPLAY_FONT}`;
+    }
+    let hintSize = Math.max(11, titleSize * 0.28);
+    ctx.font = `600 ${hintSize}px 'DM Sans', sans-serif`;
+    const hw = ctx.measureText(hint).width;
+    if (hw > box.width * 0.9) hintSize *= (box.width * 0.9) / hw;
+
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText("¡COMPLETO! — puño para guardar", box.x + box.width / 2, box.y + box.height / 2);
+    ctx.lineJoin = "round";
+    ctx.font = `800 ${titleSize}px ${DISPLAY_FONT}`;
+    ctx.lineWidth = Math.max(4, titleSize * 0.12);
+    ctx.strokeStyle = "rgba(6,38,26,0.85)";
+    ctx.strokeText(title, cx, cy - hintSize * 0.6);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(title, cx, cy - hintSize * 0.6);
+    ctx.font = `600 ${hintSize}px 'DM Sans', sans-serif`;
+    ctx.lineWidth = Math.max(3, hintSize * 0.3);
+    ctx.strokeText(hint, cx, cy + titleSize * 0.55);
+    ctx.fillText(hint, cx, cy + titleSize * 0.55);
     ctx.restore();
   }
 }
@@ -774,7 +819,7 @@ function updateProgressBadge() {
     return;
   }
   const placedCount = puzzle.pieces.filter((p) => p.placed).length;
-  progressText.textContent = `${placedCount} / ${puzzle.pieces.length} piezas colocadas`;
+  progressText.textContent = `${placedCount} dari ${puzzle.pieces.length} keping terpasang`;
   progressBadge.classList.add("visible");
   progressBadge.classList.toggle("solved", puzzle.solved);
 }
@@ -801,7 +846,7 @@ function applyBWInsideBox(box) {
 
 function drawLiveFrameOverlay(box) {
   ctx.save();
-  ctx.strokeStyle = "#f5c518";
+  ctx.strokeStyle = COLOR_FLASH;
   ctx.lineWidth = 3;
   ctx.strokeRect(box.x, box.y, box.width, box.height);
 
@@ -964,7 +1009,7 @@ function finishShatter() {
   shatter.fragments = [];
   if (shatter.pendingCanvas) {
     addToGallery(shatter.pendingCanvas);
-    statusText.textContent = "¡guardado en la tira!";
+    statusText.textContent = "tersimpan di tira!";
     shatter.pendingCanvas = null;
   }
   resetPuzzleOnly();
@@ -972,7 +1017,7 @@ function finishShatter() {
 
 function handleFistReset() {
   if (appState !== "puzzle") {
-    statusText.textContent = "reiniciado (puño)";
+    statusText.textContent = "puzzle diulang";
     resetPuzzleOnly();
     return;
   }
@@ -984,18 +1029,32 @@ function handleFistReset() {
     shatter.pendingCanvas = puzzle.fullPhotoboothCanvas;
     startShatter(puzzle.fullPhotoboothCanvas, puzzle.boardBox);
   } else {
-    statusText.textContent = "reiniciado (puño)";
+    statusText.textContent = "puzzle diulang";
     resetPuzzleOnly();
   }
 }
 
 let handLandmarker = null;
+let loopStarted = false;
+let booting = false;
+
+function handLabelFor(result, i) {
+  const cat = result.handednesses?.[i]?.[0] || result.handedness?.[i]?.[0];
+  const name = cat?.categoryName;
+  // Jika dua tangan terdeteksi dengan label sama, pakai indeks agar tetap unik
+  if (name) {
+    const sameCount = (result.handednesses || result.handedness || [])
+      .filter((h) => h?.[0]?.categoryName === name).length;
+    if (sameCount === 1) return name;
+  }
+  return i === 0 ? "A" : "B";
+}
 let fistHoldCounter = 0;
 
 function processResults(result) {
   if (appState === "shattering") {
     updateAndDrawShatter();
-    statusText.textContent = "guardando…";
+    statusText.textContent = "menyimpan…";
     return;
   }
 
@@ -1007,7 +1066,7 @@ function processResults(result) {
     fistHoldCounter = 0;
     freezeGate.holding = false;
 
-    if (drag.activeHand && drag.piece) {
+    if (drag.activeHand && drag.activeHand !== "pointer" && drag.piece) {
       handleDragForHand(drag.activeHand, false, { x: drag.piece.x, y: drag.piece.y });
     }
 
@@ -1018,8 +1077,8 @@ function processResults(result) {
         drawLiveFrameOverlay(lastSeenFrame.box);
       }
       statusText.textContent = isStripFull()
-        ? "tira completa — descarga o reinicia"
-        : "buscando manos…";
+        ? "tira penuh — unduh atau mulai tira baru"
+        : "mencari tangan…";
       return;
     }
 
@@ -1033,8 +1092,8 @@ function processResults(result) {
       updateProgressBadge();
       drawBoardAndPieces();
       statusText.textContent = puzzle.solved
-        ? "¡rompecabezas completo! cierra el puño para guardarlo"
-        : "arma el rompecabezas con pinch";
+        ? "lengkap! kepalkan tangan untuk menyimpan"
+        : "susun puzzle dengan mencubit atau mouse";
       return;
     }
 
@@ -1058,7 +1117,7 @@ function processResults(result) {
 
   if (appState === "tracking") {
     if (isStripFull()) {
-      statusText.textContent = "tira completa — descarga o reinicia";
+      statusText.textContent = "tira penuh — unduh atau mulai tira baru";
       return;
     }
     if (handsLandmarks.length === 2) {
@@ -1081,7 +1140,7 @@ function processResults(result) {
           freezeGate.since = performance.now();
         }
         statusDot.className = "status-dot armed";
-        statusText.textContent = "sostén el pinch…";
+        statusText.textContent = "tahan cubitannya…";
 
         if (performance.now() - freezeGate.since > FREEZE_HOLD_MS) {
           freezeGate.holding = false;
@@ -1089,7 +1148,7 @@ function processResults(result) {
         }
       } else {
         freezeGate.holding = false;
-        statusText.textContent = "manos en seguimiento";
+        statusText.textContent = "bingkai dengan dua tangan lalu cubit";
       }
     } else {
       freezeGate.holding = false;
@@ -1097,9 +1156,9 @@ function processResults(result) {
       if (lastSeenFrame.box && sinceLastSeen < FRAME_GRACE_MS) {
         applyBWInsideBox(lastSeenFrame.box);
         drawLiveFrameOverlay(lastSeenFrame.box);
-        statusText.textContent = "manos en seguimiento";
+        statusText.textContent = "bingkai dengan dua tangan lalu cubit";
       } else {
-        statusText.textContent = "manos en seguimiento";
+        statusText.textContent = "bingkai dengan dua tangan lalu cubit";
       }
     }
     return;
@@ -1113,14 +1172,14 @@ function processResults(result) {
   if (appState === "puzzle") {
     const labelsPresent = new Set();
     handsLandmarks.forEach((lm, i) => {
-      const label = i === 0 ? "A" : "B";
+      const label = handLabelFor(result, i);
       labelsPresent.add(label);
       const pinching = isPinching(lm);
       const indexPx = toPixel(mirrorLandmarkX(lm[LM.INDEX_TIP]));
       handleDragForHand(label, pinching, indexPx);
     });
 
-    if (drag.activeHand && !labelsPresent.has(drag.activeHand) && drag.piece) {
+    if (drag.activeHand && drag.activeHand !== "pointer" && !labelsPresent.has(drag.activeHand) && drag.piece) {
       handleDragForHand(drag.activeHand, false, { x: drag.piece.x, y: drag.piece.y });
     }
 
@@ -1134,18 +1193,28 @@ function processResults(result) {
 
     statusText.textContent = puzzle.solved
       ? (fistHoldCounter > 0
-          ? `guardando… sostén el puño (${fistHoldCounter}/${FIST_HOLD_FRAMES})`
-          : "¡rompecabezas completo! cierra el puño para guardarlo")
-      : "arma el rompecabezas con pinch";
+          ? `menyimpan… tahan kepalan (${fistHoldCounter}/${FIST_HOLD_FRAMES})`
+          : "lengkap! kepalkan tangan untuk menyimpan")
+      : "susun puzzle dengan mencubit atau mouse";
   }
 }
+
+let lastVideoTime = -1;
+let lastResult = { landmarks: [] };
 
 function renderLoop() {
   if (videoEl.readyState >= 2 && handLandmarker) {
     drawVideoFrame();
-    const nowMs = performance.now();
-    const result = handLandmarker.detectForVideo(videoEl, nowMs);
-    processResults(result);
+    // Hanya deteksi ulang jika ada frame video baru (hemat CPU/GPU)
+    if (videoEl.currentTime !== lastVideoTime) {
+      lastVideoTime = videoEl.currentTime;
+      try {
+        lastResult = handLandmarker.detectForVideo(videoEl, performance.now());
+      } catch (err) {
+        console.warn("[PuzzleCam] detectForVideo gagal:", err);
+      }
+    }
+    processResults(lastResult);
   }
   requestAnimationFrame(renderLoop);
 }
@@ -1156,71 +1225,146 @@ function showError(message) {
 }
 
 function showLoaderError(message) {
+  loaderBox.hidden = false;
+  loaderBox.classList.add("is-error");
   loaderText.textContent = message;
-  loaderText.style.color = "#e0533d";
+  loaderText.classList.add("is-error");
+  startBtn.classList.add("hidden");
   loaderRetry.classList.remove("hidden");
+  statusText.textContent = "kamera belum aktif";
 }
 
 function resetLoaderUI() {
   loadingOverlay.classList.remove("hidden");
-  loaderText.style.color = "";
-  loaderText.textContent = "cargando modelo HandLandmarker…";
+  loaderBox.hidden = false;
+  loaderBox.classList.remove("is-error");
+  loaderText.classList.remove("is-error");
+  loaderText.textContent = "Menyalakan kamera dan memuat model pelacak tangan (±10 MB, hanya sekali)…";
+  startBtn.classList.add("hidden");
   loaderRetry.classList.add("hidden");
   errorBanner.style.display = "none";
 }
 
 async function boot() {
+  if (booting) return;
+  booting = true;
   resetLoaderUI();
+  statusText.textContent = "memuat…";
 
   let settled = false;
   const watchdogMs = (LOAD_TIMEOUT_MS * 2) + 5000;
   const watchdog = setTimeout(() => {
     if (!settled) {
-      showLoaderError("La carga está tardando demasiado. Pulsa reintentar o revisa tu conexión.");
+      showLoaderError("Pemuatan terlalu lama. Periksa koneksi internet lalu tekan Coba lagi.");
     }
   }, watchdogMs);
 
   try {
+    if (!window.isSecureContext) {
+      throw new Error("Kamera hanya bisa dipakai lewat HTTPS atau localhost. Buka halaman ini lewat alamat https://.");
+    }
     if (!videoEl.srcObject) {
       await initWebcam();
     }
 
-    handLandmarker = await initHandLandmarker();
+    if (!handLandmarker) {
+      handLandmarker = await initHandLandmarker();
+    }
 
     settled = true;
     clearTimeout(watchdog);
     loadingOverlay.classList.add("hidden");
-    statusText.textContent = "listo";
-    requestAnimationFrame(renderLoop);
+    statusText.textContent = "siap — angkat kedua tanganmu";
+    statusDot.className = "status-dot live";
+    if (!loopStarted) {
+      loopStarted = true;
+      requestAnimationFrame(renderLoop);
+    }
   } catch (err) {
     settled = true;
     clearTimeout(watchdog);
+    console.error("[PuzzleCam]", err);
     if (err && err.name === "NotAllowedError") {
-      showLoaderError("Permiso de cámara denegado. Habilítalo en la configuración del navegador y pulsa reintentar.");
+      showLoaderError("Izin kamera ditolak. Izinkan kamera lewat ikon gembok di address bar, lalu tekan Coba lagi.");
     } else if (err && err.name === "NotFoundError") {
-      showLoaderError("No se encontró ninguna webcam disponible.");
+      showLoaderError("Tidak ada webcam yang terdeteksi. Sambungkan kamera lalu tekan Coba lagi.");
+    } else if (err && err.name === "NotReadableError") {
+      showLoaderError("Kamera sedang dipakai aplikasi lain (Zoom, Meet, Discord, dll). Tutup aplikasinya lalu tekan Coba lagi.");
     } else {
-      showLoaderError((err && err.message) || "Error iniciando la app.");
+      showLoaderError((err && err.message) || "Aplikasi gagal dimulai. Tekan Coba lagi.");
     }
+  } finally {
+    booting = false;
   }
 }
 
-loaderRetry.addEventListener("click", () => {
-  boot();
+/* ---------- Mouse / sentuhan sebagai alternatif gestur ---------- */
+
+function clientToCanvas(evt) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: ((evt.clientX - rect.left) / rect.width) * canvas.width,
+    y: ((evt.clientY - rect.top) / rect.height) * canvas.height,
+  };
+}
+
+canvas.addEventListener("pointerdown", (evt) => {
+  if (appState !== "puzzle") return;
+  const pt = clientToCanvas(evt);
+  if (puzzle.solved && isPointInBoard(pt.x, pt.y, puzzle.boardBox)) {
+    handleFistReset();
+    return;
+  }
+  if (drag.activeHand !== null) return;
+  handleDragForHand("pointer", true, pt);
+  if (drag.activeHand === "pointer") canvas.setPointerCapture(evt.pointerId);
 });
+
+canvas.addEventListener("pointermove", (evt) => {
+  if (drag.activeHand !== "pointer") return;
+  handleDragForHand("pointer", true, clientToCanvas(evt));
+});
+
+function endPointerDrag(evt) {
+  if (drag.activeHand !== "pointer") return;
+  handleDragForHand("pointer", false, clientToCanvas(evt));
+}
+canvas.addEventListener("pointerup", endPointerDrag);
+canvas.addEventListener("pointercancel", endPointerDrag);
+
+/* ---------- Tombol ---------- */
+
+startBtn.addEventListener("click", boot);
+loaderRetry.addEventListener("click", boot);
 
 if (downloadStripBtn) {
   downloadStripBtn.addEventListener("click", downloadPhotoStrip);
   updateStripDownloadAvailability();
 }
 
-if (resetAllBtn) {
-  resetAllBtn.addEventListener("click", () => {
-    const confirmed = window.confirm(
-      "¿Seguro que quieres borrar toda la tira de fotos y empezar de nuevo?"
-    );
-    if (confirmed) resetEverything();
-  });
+function openConfirm() {
+  confirmDialog.hidden = false;
+  confirmCancel.focus();
+}
+function closeConfirm() {
+  confirmDialog.hidden = true;
+  resetAllBtn.focus();
 }
 
-boot();
+resetAllBtn.addEventListener("click", openConfirm);
+confirmCancel.addEventListener("click", closeConfirm);
+confirmOk.addEventListener("click", () => {
+  resetEverything();
+  closeConfirm();
+});
+confirmDialog.addEventListener("click", (e) => {
+  if (e.target === confirmDialog) closeConfirm();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !confirmDialog.hidden) closeConfirm();
+});
+
+// Jika izin kamera sudah pernah diberikan, langsung mulai tanpa klik
+navigator.permissions?.query({ name: "camera" })
+  .then((res) => { if (res.state === "granted") boot(); })
+  .catch(() => {});

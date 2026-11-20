@@ -1,62 +1,112 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="id">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Puzzle Cam — Gesture Capture</title>
+<title>PuzzleCam — photobooth gestur tangan</title>
+<meta name="description" content="Bingkai foto dengan kedua tanganmu, susun jadi puzzle 3×3, dan simpan ke tira photobooth. Berjalan langsung di browser." />
+<meta name="theme-color" content="#8e1b2c" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%238e1b2c'/%3E%3Crect x='7' y='7' width='8' height='8' fill='%23fff'/%3E%3Crect x='17' y='7' width='8' height='8' fill='%23ffd84a'/%3E%3Crect x='7' y='17' width='8' height='8' fill='%23ffd84a'/%3E%3Crect x='17' y='17' width='8' height='8' fill='%23fff'/%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="css/styles.css" />
 </head>
 <body>
 
 <div id="app">
 
-  <div id="stage">
+  <main id="stage">
     <video id="webcam" playsinline autoplay muted></video>
-    <canvas id="sceneCanvas"></canvas>
+    <canvas id="sceneCanvas" aria-label="Tampilan kamera dan papan puzzle"></canvas>
 
-    <div class="hud-top">
-      <div class="brand">PUZZLE·CAM <small>hand-frame capture</small></div>
-      <div class="status-pill">
-        <span id="statusDot" class="status-dot"></span>
-        <span id="statusText">iniciando cámara…</span>
+    <header class="hud-top">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+        PuzzleCam
       </div>
-    </div>
+      <div class="status-pill" role="status" aria-live="polite">
+        <span id="statusDot" class="status-dot"></span>
+        <span id="statusText">menunggu kamera</span>
+      </div>
+    </header>
 
     <div id="progressBadge" class="progress-badge">
-      <span id="progressText">0 / 9 piezas colocadas</span>
+      <span id="progressText">0 dari 9 keping terpasang</span>
     </div>
 
-    <div id="loadingOverlay">
-      <div class="loader-text" id="loaderText">cargando modelo HandLandmarker…</div>
-      <div class="loader-bar"></div>
-      <button type="button" id="loaderRetry" class="loader-retry hidden">reintentar</button>
-    </div>
+    <footer class="hud-bottom">
+      <ul class="gesture-key">
+        <li><span class="swatch pinch"></span>Cubit dengan dua tangan: ambil foto</li>
+        <li><span class="swatch drag"></span>Cubit satu tangan: geser keping</li>
+        <li><span class="swatch fist"></span>Kepalkan tangan: simpan atau ulang</li>
+      </ul>
+    </footer>
 
-    <div id="errorBanner"></div>
-  </div>
+    <section id="loadingOverlay" aria-labelledby="introTitle">
+      <div class="intro">
+        <h1 id="introTitle">Foto dulu,<br/>susun kemudian.</h1>
+        <p class="intro-lead">Bingkai wajahmu dengan kedua tangan, lalu susun hasilnya jadi puzzle 3×3. Tiga puzzle selesai menjadi satu tira photobooth.</p>
 
-  <aside id="gallery">
+        <ol class="intro-steps">
+          <li><b>Bingkai</b> Angkat dua tangan, cubit jempol dan telunjuk untuk membuat kotak.</li>
+          <li><b>Tahan</b> Tetap mencubit selama hitung mundur 3 detik.</li>
+          <li><b>Susun</b> Cubit sebuah keping untuk memindahkannya. Mouse dan sentuhan juga bisa.</li>
+          <li><b>Simpan</b> Kepalkan tangan saat puzzle lengkap.</li>
+        </ol>
+
+        <div class="intro-actions">
+          <button type="button" id="startBtn" class="btn btn-primary">Nyalakan kamera</button>
+          <button type="button" id="loaderRetry" class="btn btn-ghost hidden">Coba lagi</button>
+        </div>
+
+        <div class="loader" id="loaderBox" hidden>
+          <div class="loader-bar"></div>
+          <p class="loader-text" id="loaderText">Memuat model pelacak tangan…</p>
+        </div>
+
+        <p class="intro-note">Semua diproses di browsermu. Tidak ada foto yang dikirim ke server.</p>
+      </div>
+    </section>
+
+    <div id="errorBanner" role="alert"></div>
+  </main>
+
+  <aside id="gallery" aria-label="Tira foto">
     <div class="gallery-head">
-      <span class="gallery-title">Tira</span>
+      <h2 class="gallery-title">Tira foto</h2>
       <span class="gallery-count" id="galleryCount">0 / 3</span>
     </div>
 
-    <div class="strip-complete-msg" id="stripCompleteMsg">
-      tira completa — descarga o reinicia para seguir
-    </div>
-
-    <div id="galleryStrip" class="gallery-strip">
-      <div class="gallery-empty" id="galleryEmpty">
-        Tus rompecabezas completados<br/>aparecerán aquí.
+    <div class="strip-wrap">
+      <div id="galleryStrip" class="gallery-strip">
+        <div class="slot" data-slot="1"><span>1</span></div>
+        <div class="slot" data-slot="2"><span>2</span></div>
+        <div class="slot" data-slot="3"><span>3</span></div>
+        <div class="strip-foot" id="stripFoot">PuzzleCam</div>
       </div>
     </div>
 
+    <p class="strip-complete-msg" id="stripCompleteMsg">Tira sudah penuh. Unduh atau mulai tira baru.</p>
+    <p class="gallery-empty" id="galleryEmpty">Puzzle yang selesai akan dicetak di sini.</p>
+
     <div class="gallery-actions">
-      <button type="button" id="downloadStripBtn" class="gallery-action-btn" disabled>descargar tira</button>
-      <button type="button" id="resetAllBtn" class="gallery-action-btn gallery-action-btn--danger">reiniciar todo</button>
+      <button type="button" id="downloadStripBtn" class="btn btn-paper" disabled>Unduh tira</button>
+      <button type="button" id="resetAllBtn" class="btn btn-ghost-light">Mulai tira baru</button>
     </div>
   </aside>
 
+</div>
+
+<div id="confirmDialog" class="dialog" hidden>
+  <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <h3 id="confirmTitle">Hapus tira ini?</h3>
+    <p>Semua foto di tira akan dihapus dan puzzle dimulai dari awal.</p>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-ghost-dark" id="confirmCancel">Batal</button>
+      <button type="button" class="btn btn-danger" id="confirmOk">Hapus tira</button>
+    </div>
+  </div>
 </div>
 
 <script type="module" src="./app.js"></script>
