@@ -16,7 +16,12 @@ const LM = {
   PINKY_MCP: 17,
 };
 
-const PINCH_THRESHOLD = 0.055;
+// Cubit dinilai relatif terhadap ukuran telapak, jadi tetap akurat
+// saat tangan dekat maupun jauh dari kamera. Dua ambang (hysteresis)
+// mencegah status cubit "berkedip" di sekitar batas.
+const PINCH_ENTER_RATIO = 0.33;
+const PINCH_RELEASE_RATIO = 0.5;
+const DRAG_LOST_GRACE_MS = 300;
 const FRAME_PADDING = 28;
 const FREEZE_HOLD_MS = 250;
 const COUNTDOWN_SECONDS = 3;
@@ -308,9 +313,9 @@ async function initHandLandmarker() {
         },
         runningMode: "video",
         numHands: 2,
-        minHandDetectionConfidence: 0.6,
-        minHandPresenceConfidence: 0.6,
-        minTrackingConfidence: 0.6,
+        minHandDetectionConfidence: 0.5,
+        minHandPresenceConfidence: 0.5,
+        minTrackingConfidence: 0.5,
       }),
       LOAD_TIMEOUT_MS,
       "Waktu habis saat mengunduh model tangan (mode GPU)."
@@ -330,9 +335,9 @@ async function initHandLandmarker() {
         },
         runningMode: "video",
         numHands: 2,
-        minHandDetectionConfidence: 0.6,
-        minHandPresenceConfidence: 0.6,
-        minTrackingConfidence: 0.6,
+        minHandDetectionConfidence: 0.5,
+        minHandPresenceConfidence: 0.5,
+        minTrackingConfidence: 0.5,
       }),
       LOAD_TIMEOUT_MS,
       "Gagal mengunduh model tangan (±10 MB). Periksa koneksi internet atau apakah storage.googleapis.com diblokir di jaringanmu."
@@ -349,8 +354,25 @@ function dist2D(a, b) {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
-function isPinching(landmarks) {
-  return dist2D(landmarks[LM.THUMB_TIP], landmarks[LM.INDEX_TIP]) < PINCH_THRESHOLD;
+function distPx(a, b) {
+  // Jarak dalam piksel (koordinat MediaPipe dinormalisasi terpisah untuk x dan y)
+  const dx = (a.x - b.x) * canvas.width;
+  const dy = (a.y - b.y) * canvas.height;
+  return Math.hypot(dx, dy);
+}
+
+function palmSize(landmarks) {
+  return Math.max(1, distPx(landmarks[LM.WRIST], landmarks[LM.MIDDLE_MCP]));
+}
+
+const pinchMemory = new Map();
+
+function isPinching(landmarks, key = "_") {
+  const ratio = distPx(landmarks[LM.THUMB_TIP], landmarks[LM.INDEX_TIP]) / palmSize(landmarks);
+  const was = pinchMemory.get(key) || false;
+  const now = was ? ratio < PINCH_RELEASE_RATIO : ratio < PINCH_ENTER_RATIO;
+  pinchMemory.set(key, now);
+  return now;
 }
 
 function isFist(landmarks) {
@@ -363,9 +385,89 @@ function isFist(landmarks) {
   ];
   let curled = 0;
   for (const [tipIdx, mcpIdx] of pairs) {
-    if (dist2D(landmarks[tipIdx], wrist) < dist2D(landmarks[mcpIdx], wrist)) curled++;
+    if (distPx(landmarks[tipIdx], wrist) < distPx(landmarks[mcpIdx], wrist) * 1.05) curled++;
   }
   return curled >= 4;
+}
+
+// Titik tengah jempol–telunjuk (sudah dicerminkan), lebih stabil saat mencubit
+function pinchPointNorm(landmarks) {
+  const t = landmarks[LM.THUMB_TIP];
+  const i = landmarks[LM.INDEX_TIP];
+  return { x: 1 - (t.x + i.x) / 2, y: (t.y + i.y) / 2 };
+}
+
+/* ---------- Penghalusan titik tangan (mengurangi getar) ---------- */
+
+const smoothMemory = new Map();
+
+function smoothResult(raw) {
+  const landmarks = raw.landmarks || [];
+  const seen = new Set();
+  const out = landmarks.map((lm, i) => {
+    const label = handLabelFor(raw, i);
+    seen.add(label);
+    const prev = smoothMemory.get(label);
+    if (!prev || prev.length !== lm.length) {
+      const copy = lm.map((p) => ({ x: p.x, y: p.y, z: p.z }));
+      smoothMemory.set(label, copy);
+      return copy;
+    }
+    // Gerakan cepat -> ikuti lebih cepat; gerakan pelan -> lebih halus
+    let move = 0;
+    for (let k = 0; k < lm.length; k++) move += Math.hypot(lm[k].x - prev[k].x, lm[k].y - prev[k].y);
+    move /= lm.length;
+    const alpha = Math.min(0.9, Math.max(0.35, 0.35 + move * 15));
+    const next = lm.map((p, k) => ({
+      x: prev[k].x + (p.x - prev[k].x) * alpha,
+      y: prev[k].y + (p.y - prev[k].y) * alpha,
+      z: p.z,
+    }));
+    smoothMemory.set(label, next);
+    return next;
+  });
+  for (const key of [...smoothMemory.keys()]) {
+    if (!seen.has(key)) smoothMemory.delete(key);
+  }
+  for (const key of [...pinchMemory.keys()]) {
+    if (!seen.has(key) && key !== "_") pinchMemory.delete(key);
+  }
+  return { ...raw, landmarks: out, handednesses: raw.handednesses || raw.handedness };
+}
+
+/* ---------- Umpan balik visual: kerangka tangan + kursor cubit ---------- */
+
+function drawHandCursors(result) {
+  const hands = result.landmarks || [];
+  hands.forEach((lm, i) => {
+    const label = handLabelFor(result, i);
+    const pts = lm.map((pt) => toPixel(mirrorLandmarkX(pt)));
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "rgba(255,255,255,0.45)";
+    ctx.lineWidth = 2;
+    for (const [a, b] of HAND_CONNECTIONS) {
+      ctx.beginPath();
+      ctx.moveTo(pts[a].x, pts[a].y);
+      ctx.lineTo(pts[b].x, pts[b].y);
+      ctx.stroke();
+    }
+
+    const pinching = pinchMemory.get(label) || false;
+    const pp = toPixel(pinchPointNorm(lm));
+    const r = Math.max(10, palmSize(lm) * 0.18);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = pinching ? COLOR_FLASH : "rgba(255,255,255,0.9)";
+    ctx.fillStyle = pinching ? "rgba(255,216,74,0.55)" : "rgba(255,255,255,0.08)";
+    ctx.shadowColor = "rgba(0,0,0,0.5)";
+    ctx.shadowBlur = 6;
+    ctx.beginPath();
+    ctx.arc(pp.x, pp.y, pinching ? r * 0.75 : r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  });
 }
 
 function toPixel(landmarkNorm) {
@@ -553,6 +655,7 @@ function finishCountdownAndCapture(box) {
 }
 
 const drag = {
+  lostAt: 0,
   activeHand: null,
   piece: null,
   offsetX: 0,
@@ -1051,6 +1154,19 @@ function handLabelFor(result, i) {
 }
 let fistHoldCounter = 0;
 
+function releaseLostDrag() {
+  if (!drag.activeHand || drag.activeHand === "pointer" || !drag.piece) return;
+  const now = performance.now();
+  if (!drag.lostAt) {
+    drag.lostAt = now;
+    return;
+  }
+  if (now - drag.lostAt > DRAG_LOST_GRACE_MS) {
+    drag.lostAt = 0;
+    handleDragForHand(drag.activeHand, false, { x: drag.piece.x, y: drag.piece.y });
+  }
+}
+
 function processResults(result) {
   if (appState === "shattering") {
     updateAndDrawShatter();
@@ -1066,9 +1182,7 @@ function processResults(result) {
     fistHoldCounter = 0;
     freezeGate.holding = false;
 
-    if (drag.activeHand && drag.activeHand !== "pointer" && drag.piece) {
-      handleDragForHand(drag.activeHand, false, { x: drag.piece.x, y: drag.piece.y });
-    }
+    releaseLostDrag();
 
     if (appState === "tracking") {
       const sinceLastSeen = performance.now() - lastSeenFrame.at;
@@ -1104,7 +1218,7 @@ function processResults(result) {
 
   const anyFist = handsLandmarks.some((lm) => isFist(lm));
   const draggingNow = drag.activeHand !== null && drag.piece !== null;
-  if (anyFist && !draggingNow && appState !== "tracking") {
+  if (anyFist && !draggingNow && appState === "puzzle") {
     fistHoldCounter++;
     if (fistHoldCounter >= FIST_HOLD_FRAMES) {
       fistHoldCounter = 0;
@@ -1122,9 +1236,7 @@ function processResults(result) {
     }
     if (handsLandmarks.length === 2) {
       const [handA, handB] = handsLandmarks;
-      const indexA = mirrorLandmarkX(handA[LM.INDEX_TIP]);
-      const indexB = mirrorLandmarkX(handB[LM.INDEX_TIP]);
-      const frameBox = computeHandFrame(indexA, indexB);
+      const frameBox = computeHandFrame(pinchPointNorm(handA), pinchPointNorm(handB));
 
       if (frameBox.width > 4 && frameBox.height > 4) {
         applyBWInsideBox(frameBox);
@@ -1133,7 +1245,9 @@ function processResults(result) {
         lastSeenFrame.at = performance.now();
       }
 
-      const bothPinching = isPinching(handA) && isPinching(handB);
+      const pinchA = isPinching(handA, handLabelFor(result, 0));
+      const pinchB = isPinching(handB, handLabelFor(result, 1));
+      const bothPinching = pinchA && pinchB;
       if (bothPinching && frameBox.width > 40 && frameBox.height > 40) {
         if (!freezeGate.holding) {
           freezeGate.holding = true;
@@ -1148,24 +1262,27 @@ function processResults(result) {
         }
       } else {
         freezeGate.holding = false;
-        statusText.textContent = "bingkai dengan dua tangan lalu cubit";
+        statusText.textContent = pinchA || pinchB
+          ? "satu tangan sudah mencubit, cubit juga tangan lainnya"
+          : "dua tangan terlihat, sekarang cubit jempol & telunjuk";
       }
     } else {
       freezeGate.holding = false;
+      handsLandmarks.forEach((lm, i) => isPinching(lm, handLabelFor(result, i)));
       const sinceLastSeen = performance.now() - lastSeenFrame.at;
       if (lastSeenFrame.box && sinceLastSeen < FRAME_GRACE_MS) {
         applyBWInsideBox(lastSeenFrame.box);
         drawLiveFrameOverlay(lastSeenFrame.box);
-        statusText.textContent = "bingkai dengan dua tangan lalu cubit";
-      } else {
-        statusText.textContent = "bingkai dengan dua tangan lalu cubit";
       }
+      statusText.textContent = "baru 1 tangan terlihat, angkat tangan satunya";
     }
+    drawHandCursors(result);
     return;
   }
 
   if (appState === "countdown") {
     drawCountdownOverlay(puzzle.boardBox);
+    if (appState === "countdown") drawHandCursors(result);
     return;
   }
 
@@ -1174,13 +1291,15 @@ function processResults(result) {
     handsLandmarks.forEach((lm, i) => {
       const label = handLabelFor(result, i);
       labelsPresent.add(label);
-      const pinching = isPinching(lm);
-      const indexPx = toPixel(mirrorLandmarkX(lm[LM.INDEX_TIP]));
-      handleDragForHand(label, pinching, indexPx);
+      const pinching = isPinching(lm, label);
+      const pointPx = toPixel(pinchPointNorm(lm));
+      handleDragForHand(label, pinching, pointPx);
     });
 
-    if (drag.activeHand && drag.activeHand !== "pointer" && !labelsPresent.has(drag.activeHand) && drag.piece) {
-      handleDragForHand(drag.activeHand, false, { x: drag.piece.x, y: drag.piece.y });
+    if (drag.activeHand && labelsPresent.has(drag.activeHand)) {
+      drag.lostAt = 0;
+    } else {
+      releaseLostDrag();
     }
 
     if (!drag.piece) {
@@ -1189,7 +1308,7 @@ function processResults(result) {
     }
 
     drawBoardAndPieces();
-    drawHandSkeletonsOverBoard(handsLandmarks, puzzle.boardBox);
+    drawHandCursors(result);
 
     statusText.textContent = puzzle.solved
       ? (fistHoldCounter > 0
@@ -1209,7 +1328,7 @@ function renderLoop() {
     if (videoEl.currentTime !== lastVideoTime) {
       lastVideoTime = videoEl.currentTime;
       try {
-        lastResult = handLandmarker.detectForVideo(videoEl, performance.now());
+        lastResult = smoothResult(handLandmarker.detectForVideo(videoEl, performance.now()));
       } catch (err) {
         console.warn("[PuzzleCam] detectForVideo gagal:", err);
       }
