@@ -109,6 +109,17 @@
   </div>
 </div>
 
+<script>
+  // Dibuka langsung dari file (dobel-klik)? Modul JS & kamera tidak akan jalan.
+  if (location.protocol === "file:") {
+    document.addEventListener("DOMContentLoaded", function () {
+      var t = document.getElementById("loaderText"), b = document.getElementById("loaderBox");
+      b.hidden = false; b.classList.add("is-error"); t.classList.add("is-error");
+      t.textContent = "Halaman ini dibuka langsung dari file, jadi kamera tidak bisa dipakai. Jalankan lewat Live Server di VS Code atau buka alamat GitHub Pages-nya.";
+      document.getElementById("startBtn").disabled = true;
+    });
+  }
+</script>
 <script type="module" src="./app.js"></script>
 </body>
 </html>
